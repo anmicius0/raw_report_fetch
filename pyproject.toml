@@ -1,0 +1,15 @@
+[project]
+name = "iqserver-report-fetch"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "pandas==2.3.0",
+    "pydantic==2.11.6",
+    "python-dotenv==1.1.0",
+    "requests==2.32.3",
+    "pyinstaller>=6.0.0",
+    "tqdm>=4.67.1",
+]
+
+[project.scripts]
+iq-fetch = "iq_fetcher.__main__:main"

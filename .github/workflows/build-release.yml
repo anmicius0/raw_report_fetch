@@ -1,0 +1,169 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  UV_SYSTEM_PYTHON: 1
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux
+            asset_name: report-fetch-linux
+            archive_ext: .tar.gz
+          - os: windows-latest
+            target: windows
+            asset_name: report-fetch-windows
+            archive_ext: .zip
+          - os: macos-latest
+            target: macos
+            asset_name: report-fetch-macos
+            archive_ext: .tar.gz
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python and dependencies
+        run: |
+          uv python install
+          uv sync --frozen
+
+      - name: Verify required files exist
+        shell: bash
+        run: |
+          echo "Checking required files..."
+          ls -la src/iq_fetcher/ src/iq_fetcher/__main__.py pyproject.toml README.md
+          ls -la config/.env.example
+          echo "All required files found!"
+          # cli.py is no longer required as entry point
+
+      - name: Build executable (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          uv run pyinstaller --onefile --name report-fetch --add-data="config/.env.example;config" --clean src/iq_fetcher/__main__.py
+
+      - name: Build executable (Non-Windows)
+        if: runner.os != 'Windows'
+        run: |
+          uv run pyinstaller \
+            --onefile \
+            --name report-fetch \
+            --add-data="config/.env.example:config" \
+            src/iq_fetcher/__main__.py
+
+      - name: Package release
+        shell: bash
+        run: |
+          mkdir -p ${{ matrix.asset_name }}
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp dist/report-fetch.exe ${{ matrix.asset_name }}/
+            echo "report-fetch.exe" > ${{ matrix.asset_name }}/executable_name.txt
+          else
+            cp dist/report-fetch ${{ matrix.asset_name }}/
+            echo "report-fetch" > ${{ matrix.asset_name }}/executable_name.txt
+          fi
+          mkdir -p ${{ matrix.asset_name }}/config
+          cp config/.env.example ${{ matrix.asset_name }}/config/
+          cp README.md ${{ matrix.asset_name }}/
+
+      - name: Create archive
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            powershell Compress-Archive -Path ${{ matrix.asset_name }} -DestinationPath ${{ matrix.asset_name }}.zip
+          else
+            tar -czf ${{ matrix.asset_name }}.tar.gz ${{ matrix.asset_name }}/
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: ${{ matrix.asset_name }}.*
+          retention-days: 30
+
+  release:
+    name: Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Get version
+        id: version
+        run: |
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+          else
+            VERSION="latest"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Format release date
+        id: format_date
+        run: echo "formatted_date=$(TZ='Asia/Taipei' date -d \"${{ github.event.repository.pushed_at }}\" '+%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: Delete previous releases
+        uses: sgpublic/delete-release-action@v1.1
+        if: github.event_name == 'push' && contains(github.ref, 'refs/tags/')
+        with:
+          release-drop: true
+          release-keep-count: 0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: IQ Server Report Fetch ${{ steps.version.outputs.version }}
+          body: |
+            ## IQ Server Report Fetch ${{ steps.version.outputs.version }}
+
+            Cross-platform executables for automated raw report fetching from IQ Server systems.
+
+            **Release Date:** ${{ steps.format_date.outputs.formatted_date }}
+
+            **Downloads:**
+            - Windows: `report-fetch-windows.zip`
+            - macOS: `report-fetch-macos.tar.gz`
+            - Linux: `report-fetch-linux.tar.gz`
+
+            **Quick Start:**
+            1. Download and extract for your platform
+            2. Create `.env` file in `config/` directory based on `.env.example`
+            3. Run: `./report-fetch` (Linux/macOS) or `report-fetch.exe` (Windows)
+
+            No Python installation required.
+          files: |
+            report-fetch-windows.zip
+            report-fetch-macos.tar.gz
+            report-fetch-linux.tar.gz
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
