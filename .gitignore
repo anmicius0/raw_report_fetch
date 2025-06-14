@@ -50,9 +50,21 @@ reports/
 build/*
 build/**
 
+dist/*
+dist/**
+
 # Ignore all files in build/ and dist/ recursively
 build/
 dist/
 
 # Environment variables
 .env
+config/.env
+
+# Project directories
+ctbc-raw-report-fetch/
+
+# Shell scripts
+scripts/build_macos.sh
+
+ctbc-raw-report-fetch

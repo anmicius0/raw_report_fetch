@@ -1,0 +1,177 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  UV_SYSTEM_PYTHON: 1
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset_name: ctbc-raw-report-fetch-linux
+          - os: windows-latest
+            asset_name: ctbc-raw-report-fetch-windows
+          - os: macos-latest
+            asset_name: ctbc-raw-report-fetch-macos
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python and dependencies
+        run: |
+          uv python install
+          uv sync --frozen
+
+      - name: Verify required files exist
+        shell: bash
+        run: |
+          echo "Checking required files..."
+          ls -la main.py error_handler.py pyproject.toml README.md
+          ls -la config/.env.example
+          echo "All required files found!"
+
+      - name: Build executable (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          uv run pyinstaller --onefile --name ctbc-raw-report-fetch --add-data="error_handler.py;." --add-data="config\.env.example;." --clean main.py
+
+      - name: Build executable (Non-Windows)
+        if: runner.os != 'Windows'
+        run: |
+          uv run pyinstaller \
+            --onefile \
+            --name ctbc-raw-report-fetch \
+            --add-data="error_handler.py:." \
+            --add-data="config/.env.example:." \
+            --clean \
+            main.py
+
+      - name: Verify build output
+        shell: bash
+        run: |
+          echo "Build completed. Checking dist directory..."
+          ls -la dist/
+          echo "Current directory contents:"
+          ls -la
+
+      - name: Package release
+        shell: bash
+        run: |
+          echo "Creating release package..."
+          mkdir -p ${{ matrix.asset_name }}
+
+          # Copy executable
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            if [ -f "dist/ctbc-raw-report-fetch.exe" ]; then
+              cp dist/ctbc-raw-report-fetch.exe ${{ matrix.asset_name }}/
+              echo "ctbc-raw-report-fetch.exe" > ${{ matrix.asset_name }}/executable_name.txt
+            else
+              echo "Error: Windows executable not found!"
+              exit 1
+            fi
+          else
+            if [ -f "dist/ctbc-raw-report-fetch" ]; then
+              cp dist/ctbc-raw-report-fetch ${{ matrix.asset_name }}/
+              echo "ctbc-raw-report-fetch" > ${{ matrix.asset_name }}/executable_name.txt
+            else
+              echo "Error: Unix executable not found!"
+              exit 1
+            fi
+          fi
+
+          # Copy additional files
+          echo "Copying additional files..."
+          cp README.md ${{ matrix.asset_name }}/
+          mkdir -p ${{ matrix.asset_name }}/config
+          cp config/.env.example ${{ matrix.asset_name }}/config/
+
+          echo "Package contents:"
+          ls -la ${{ matrix.asset_name }}/
+          ls -la ${{ matrix.asset_name }}/config/
+
+      - name: Create archive
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            powershell Compress-Archive -Path ${{ matrix.asset_name }} -DestinationPath ${{ matrix.asset_name }}.zip
+          else
+            tar -czf ${{ matrix.asset_name }}.tar.gz ${{ matrix.asset_name }}/
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: ${{ matrix.asset_name }}.*
+          retention-days: 30
+
+  release:
+    name: Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (contains(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Get version
+        id: version
+        run: |
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+          else
+            VERSION="latest"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: CTBC Raw Report Fetch ${{ steps.version.outputs.version }}
+          body: |
+            ## CTBC Raw Report Fetch ${{ steps.version.outputs.version }}
+
+            Cross-platform executables for raw report fetching.
+
+            **Downloads:**
+            - Windows: `ctbc-raw-report-fetch-windows.zip`
+            - macOS: `ctbc-raw-report-fetch-macos.tar.gz`
+            - Linux: `ctbc-raw-report-fetch-linux.tar.gz`
+
+            **Quick Start:**
+            1. Download and extract for your platform
+            2. Create `.env` file if needed
+            3. Run: `./ctbc-raw-report-fetch`
+
+            No Python installation required.
+          files: |
+            ctbc-raw-report-fetch-windows.zip
+            ctbc-raw-report-fetch-macos.tar.gz
+            ctbc-raw-report-fetch-linux.tar.gz
+          draft: false
+          prerelease: ${{ steps.version.outputs.version == 'latest' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

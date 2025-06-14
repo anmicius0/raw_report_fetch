@@ -49,7 +49,7 @@ def resolve_path(path: str) -> str:
 
 
 # Load .env
-load_dotenv(dotenv_path=resolve_path(".env"))
+load_dotenv(dotenv_path=resolve_path("config/.env"))
 
 
 # Terminal colors
@@ -236,7 +236,9 @@ class RawReportFetcher:
                         lambda x: (
                             json.dumps(x)
                             if isinstance(x, (dict, list))
-                            else str(x) if x is not None else ""
+                            else str(x)
+                            if x is not None
+                            else ""
                         )
                     )
             df.to_csv(filepath, index=False, encoding="utf-8")
