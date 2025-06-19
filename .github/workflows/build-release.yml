@@ -18,11 +18,17 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
+            target: linux
             asset_name: ctbc-raw-report-fetch-linux
+            archive_ext: .tar.gz
           - os: windows-latest
+            target: windows
             asset_name: ctbc-raw-report-fetch-windows
+            archive_ext: .zip
           - os: macos-latest
+            target: macos
             asset_name: ctbc-raw-report-fetch-macos
+            archive_ext: .tar.gz
 
     steps:
       - uses: actions/checkout@v4
@@ -41,14 +47,15 @@ jobs:
         shell: bash
         run: |
           echo "Checking required files..."
-          ls -la main.py error_handler.py pyproject.toml README.md
+          ls -la iq_fetcher/ main.py pyproject.toml README.md
           ls -la config/.env.example
           echo "All required files found!"
+          # cli.py is no longer required as entry point
 
       - name: Build executable (Windows)
         if: runner.os == 'Windows'
         run: |
-          uv run pyinstaller --onefile --name ctbc-raw-report-fetch --add-data="error_handler.py;." --add-data="config\.env.example;." --clean main.py
+          uv run pyinstaller --onefile --name ctbc-raw-report-fetch --add-data="config/.env.example;config" --clean main.py
 
       - name: Build executable (Non-Windows)
         if: runner.os != 'Windows'
@@ -56,18 +63,9 @@ jobs:
           uv run pyinstaller \
             --onefile \
             --name ctbc-raw-report-fetch \
-            --add-data="error_handler.py:." \
-            --add-data="config/.env.example:." \
+            --add-data="config/.env.example:config" \
             --clean \
             main.py
-
-      - name: Verify build output
-        shell: bash
-        run: |
-          echo "Build completed. Checking dist directory..."
-          ls -la dist/
-          echo "Current directory contents:"
-          ls -la
 
       - name: Package release
         shell: bash
@@ -104,7 +102,7 @@ jobs:
     name: Release
     needs: build
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && (contains(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
     permissions:
       contents: write
 
@@ -126,6 +124,19 @@ jobs:
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+      - name: Format release date
+        id: format_date
+        run: echo "formatted_date=$(TZ='Asia/Taipei' date -d "${{ github.event.repository.pushed_at }}" '+%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: Delete previous releases
+        uses: sgpublic/delete-release-action@v1.1
+        if: github.event_name == 'push' && contains(github.ref, 'refs/tags/')
+        with:
+          release-drop: true
+          release-keep-count: 0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
@@ -136,6 +147,9 @@ jobs:
 
             Cross-platform executables for automated raw report fetching from CTBC systems.
 
+            **Release Date:** ${{ steps.format_date.outputs.formatted_date }}
+
+            **Downloads:**
             **Downloads:**
             - Windows: `ctbc-raw-report-fetch-windows.zip`
             - macOS: `ctbc-raw-report-fetch-macos.tar.gz`
@@ -143,21 +157,15 @@ jobs:
 
             **Quick Start:**
             1. Download and extract for your platform
-            2. Configure your settings in `config/.env` (copy from `.env.example`)
-            3. Run: `./ctbc-raw-report-fetch`
+            2. Create `.env` file in `config/` directory based on `.env.example`
+            3. Run: `./ctbc-raw-report-fetch` (Linux/macOS) or `ctbc-raw-report-fetch.exe` (Windows)
 
-            **Features:**
-            - No Python installation required
-            - Cross-platform compatibility
-            - Automated report processing
-            - Error handling and logging
-
-            No dependencies required - just download and run!
+            No Python installation required.
           files: |
             ctbc-raw-report-fetch-windows.zip
             ctbc-raw-report-fetch-macos.tar.gz
             ctbc-raw-report-fetch-linux.tar.gz
           draft: false
-          prerelease: ${{ steps.version.outputs.version == 'latest' }}
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

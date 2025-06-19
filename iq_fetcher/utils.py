@@ -1,5 +1,6 @@
 import logging
 import sys
+import os
 from typing import Callable, TypeVar, Any, Union
 from functools import wraps
 import requests
@@ -8,7 +9,71 @@ from pydantic import ValidationError
 # Type variable for generic function signatures
 F = TypeVar("F", bound=Callable[..., Any])
 
+
+# Utility: get base_dir and resolve_path
+base_dir = (
+    os.path.dirname(sys.executable)
+    if getattr(sys, "frozen", False)
+    else os.path.dirname(os.path.dirname(__file__))  # Go up one level from iq_fetcher/
+)
+
+
+def resolve_path(path: str) -> str:
+    """Resolve relative paths to absolute paths relative to the project root."""
+    return path if os.path.isabs(path) else os.path.join(base_dir, path)
+
+
+# Terminal colors
+class Colors:
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    RED = "\033[91m"
+    BLUE = "\033[94m"
+    PURPLE = "\033[95m"
+    CYAN = "\033[96m"
+    WHITE = "\033[97m"
+    BOLD = "\033[1m"
+    END = "\033[0m"
+
+
+# Pretty logging with more emojis and life!
+class PrettyFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        msg = record.getMessage()
+        if record.levelname == "INFO":
+            if "✅" in msg or "✓" in msg or "Successfully" in msg:
+                return f"{Colors.GREEN}{msg}{Colors.END}"
+            if "❌" in msg or "✗" in msg or "Failed" in msg:
+                return f"{Colors.RED}{msg}{Colors.END}"
+            if "🔍" in msg or "Found" in msg or "Fetching" in msg:
+                return f"{Colors.CYAN}{Colors.BOLD}{msg}{Colors.END}"
+            if "🎉" in msg or "🏆" in msg or "completed" in msg:
+                return f"{Colors.PURPLE}{Colors.BOLD}{msg}{Colors.END}"
+            if "🚀" in msg or "Starting" in msg or "Welcome" in msg:
+                return f"{Colors.BLUE}{Colors.BOLD}{msg}{Colors.END}"
+            return f"{Colors.BLUE}{msg}{Colors.END}"
+        if record.levelname == "ERROR":
+            return f"{Colors.RED}{Colors.BOLD}{msg}{Colors.END}"
+        if record.levelname == "WARNING":
+            return f"{Colors.YELLOW}{Colors.BOLD}{msg}{Colors.END}"
+        return msg
+
+
+# Configure logger
 logger = logging.getLogger(__name__)
+log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
+log_level = getattr(logging, log_level_str, logging.INFO)
+logger.setLevel(log_level)
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(PrettyFormatter())
+logger.addHandler(handler)
+logger.propagate = False
+
+
+class IQServerError(Exception):
+    """Custom exception for IQ Server related errors."""
+
+    pass
 
 
 class ErrorHandler:

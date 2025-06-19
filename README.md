@@ -1,151 +1,138 @@
-# Sonatype IQ Server Raw Report Fetcher
+# CTBC IQ Server Raw Report Fetcher
 
-A tool to fetch raw scan reports from all applications in Sonatype IQ Server and export them as CSV files.
+## 📦 What Does This Tool Do?
 
----
-
-## 🚀 Quick Start
-
-1. **Download the Executable**
-
-   - Go to the [Releases](../../releases) page
-   - Download and extract the latest release for your OS
-
-2. **Configure Settings**
-
-   - Copy `config/.env.example` to `config/.env`
-   - Edit `config/.env` with your IQ Server URL, username, and password
-
-3. **Run the Tool**
-   - On macOS/Linux: `./ctbc-raw-report-fetch`
-   - On Windows: `ctbc-raw-report-fetch.exe`
-
-CSV reports will be saved in the `raw_reports` folder (or as set in `.env`).
+This tool connects to your Sonatype IQ Server, fetches security scan reports for all your applications, and saves them as CSV files. You can use these CSVs for analysis, compliance, or sharing with your team.
 
 ---
 
-## ⚙️ Configuration
+## 🚀 Getting Started: Step-by-Step
 
-Edit `config/.env` or set environment variables:
+### 1. **Download or Clone the Program**
 
-- `IQ_SERVER_URL` (required)
-- `IQ_USERNAME` (required)
-- `IQ_PASSWORD` (required)
-- `ORGANIZATION_ID` (optional)
-- `OUTPUT_DIR` (optional, default: `raw_reports`)
+- Download the latest release from the Releases page, **or**
+- Clone the repository:
+  ```sh
+  git clone <repo-url>
+  cd raw-report-fetch
+  ```
 
-Example `.env`:
+### 2. **Configure Your Settings**
+
+- Go to the `config` folder in the project directory.
+- Copy `.env.example` to `.env`:
+  ```sh
+  cp config/.env.example config/.env
+  ```
+- Open `config/.env` in a text editor and fill in your actual Sonatype IQ Server details:
+
+  - `IQ_SERVER_URL`: The address of your IQ Server
+  - `IQ_USERNAME`: Your username
+  - `IQ_PASSWORD`: Your password
+  - `OUTPUT_DIR`: (Optional) Where CSV files will be saved. Default is `raw_reports`.
+  - `NUM_WORKERS`: (Optional) Number of concurrent workers. Default is 8.
+  - `LOG_LEVEL`: (Optional) Set to DEBUG, INFO, WARNING, or ERROR.
+
+> **Tip:** If you don't know your organization ID, leave it blank to fetch all applications you have access to.
+
+### 3. **Install Dependencies**
+
+- Install [uv](https://github.com/astral-sh/uv) (recommended):
+  ```sh
+  uv pip install -r pyproject.toml
+  ```
+
+### 4. **Run the Tool**
+
+- **From source:**
+  ```sh
+  python main.py
+  ```
+- **Or, if you built an executable:**
+  ```sh
+  ./raw-report-fetch
+  ```
+
+The tool will connect to your IQ Server, fetch reports, and save CSV files in the `raw_reports` folder (or the folder you set in `.env`).
+
+---
+
+## 📝 Configuration Reference
+
+You can set configuration in two ways:
+
+1. **Edit the `config/.env` file** (recommended for most users).
+2. **Set environment variables** in your shell or system (for advanced users or automation).
+
+**Example `.env` file:**
 
 ```
 IQ_SERVER_URL=https://your-iq-server.com
 IQ_USERNAME=your-username
 IQ_PASSWORD=your-password
 OUTPUT_DIR=raw_reports
+NUM_WORKERS=8
+LOG_LEVEL=INFO
 ```
 
 ---
 
-## 🛠️ Customization
+## 🏗️ Project Structure
 
-### Filter Applications
-
-Edit `get_applications()` in `main.py` to filter by name, ID, or pattern:
-
-```python
-# ...existing code...
-apps = self.iq.get_applications(self.config.organization_id)
-filtered = [app for app in apps if "prod" in app.name.lower()]
-return filtered
-# ...existing code...
 ```
-
-### Change CSV Output
-
-Edit `_save_csv_manual()` in `main.py` to add/remove fields:
-
-```python
-# ...existing code...
-row = {
-    "Package URL": c.get("packageUrl", ""),
-    "Display Name": c.get("displayName", ""),
-    # Add custom fields here
-}
-# ...existing code...
-```
-
-### Custom File Naming
-
-Edit `_save_as_csv()` in `main.py`:
-
-```python
-# ...existing code...
-filename = f"{public_id}_{report_id}.csv"
-filepath = self.output_path / filename
-# ...existing code...
-```
-
-### Add Progress Bars
-
-Install `tqdm` and wrap your loop:
-
-```python
-from tqdm import tqdm
-for app in tqdm(apps, desc="Processing apps"):
-    self._fetch_app_report(app, ...)
+raw-report-fetch/
+├── iq_fetcher/
+│   ├── __init__.py          # Package initialization
+│   ├── config.py            # Configuration management
+│   ├── client.py            # IQ Server API client
+│   ├── fetcher.py           # Core report fetching logic
+│   └── utils.py             # Utilities, logging, error handling
+├── config/
+│   ├── .env.example         # Configuration template
+│   └── .env                 # Your configuration (not in git)
+├── main.py                  # Main entry point
+├── pyproject.toml           # Project dependencies (uv)
+├── uv.lock                  # Locked dependencies
+├── README.md                # This file
+└── scripts/
+    └── build_macos.sh       # Build script for macOS
 ```
 
 ---
 
-## 🧑‍💻 Development & Maintenance
+## 🧑‍💻 For Developers: Running from Source
 
-### Install & Run from Source
-
-1. `pip install -r requirements.txt`
-2. Copy and edit `config/.env.example` to `config/.env`
-3. `python main.py`
-
-### Update Dependencies
-
-- Edit `requirements.txt` and run `pip install -r requirements.txt`
-
-### Debugging
-
-- Set logging to DEBUG in `main.py` for more output
-- Use print statements or breakpoints as needed
-
-### Add Features
-
-- Add config options in `Config` (main.py)
-- Add new API calls in `IQServerClient`
-- Add new output formats in `RawReportFetcher`
-
-### Build Executable
-
-- Install PyInstaller: `pip install pyinstaller`
-- Build: `pyinstaller --onefile main.py`
-- Output is in `dist/`
+1. **Install dependencies:**
+   ```sh
+   uv pip install -r pyproject.toml
+   ```
+2. **Copy and edit the `.env` file** as above.
+3. **Run the tool:**
+   ```sh
+   python main.py
+   ```
 
 ---
 
-## 🤝 Contributing
+## 🏗️ Building an Executable (For Distribution)
 
-- Fork the repo, create a branch, make changes, and submit a pull request.
-- Follow PEP 8, use type hints, and add docstrings.
-
----
-
-## 📁 Project Structure
-
-```
-CTBC_raw_report_fetch/
-├── main.py              # Main logic
-├── error_handler.py     # Error handling
-├── requirements.txt     # Dependencies
-├── README.md            # This file
-├── config/.env.example  # Config template
-└── ...
-```
+1. **Install PyInstaller:**
+   ```sh
+   uv pip install pyinstaller
+   ```
+2. **Build the executable:**
+   ```sh
+   ./scripts/build_macos.sh
+   # or manually:
+   pyinstaller --onefile main.py --name raw-report-fetch
+   ```
+   - The output will be in the `dist/` folder.
 
 ---
 
-For more details, see comments in `main.py` and `error_handler.py`.
+## 🛠️ Customizing the Tool (For Advanced Users)
+
+- **Filter which applications are fetched:** Edit `get_applications()` in `iq_fetcher/fetcher.py`.
+- **Change what data goes into the CSV:** Edit the consolidation logic in `iq_fetcher/fetcher.py`.
+- **Change the CSV file name:** Edit the relevant code in `iq_fetcher/fetcher.py`.
+- **Add progress bars:** Install `tqdm` and wrap your loop as shown in the code comments.

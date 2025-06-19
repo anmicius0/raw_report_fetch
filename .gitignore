@@ -68,3 +68,4 @@ ctbc-raw-report-fetch/
 scripts/build_macos.sh
 
 ctbc-raw-report-fetch
+*.csv
