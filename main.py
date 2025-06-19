@@ -7,14 +7,16 @@ Fetches raw scan reports from all applications in IQ Server and saves them as CS
 import os
 import sys
 import json
-import csv
 from pathlib import Path
 from typing import Optional, List, Dict, Any
+from datetime import datetime
 from dotenv import load_dotenv
 from pydantic import BaseModel, field_validator, HttpUrl, ValidationInfo
 import requests
 import logging
+import re
 from error_handler import ErrorHandler
+import pandas as pd
 
 
 # Simplified models - only what we actually need
@@ -31,6 +33,16 @@ class ReportInfo(BaseModel):
     reportId: Optional[str] = None
     scanId: Optional[str] = None
     reportDataUrl: Optional[str] = None
+
+    class Config:
+        extra = "allow"
+
+
+class Organization(BaseModel):
+    id: str
+    name: str
+    parentOrganizationId: Optional[str] = None
+    tags: List[Dict[str, Any]] = []
 
     class Config:
         extra = "allow"
@@ -111,6 +123,7 @@ class Config(BaseModel):
     organization_id: Optional[str] = None
     output_dir: str = "raw_reports"
 
+    #
     @field_validator("iq_username", "iq_password")
     @classmethod
     def not_empty(cls, v: Any, info: ValidationInfo) -> str:
@@ -181,18 +194,27 @@ class IQServerClient:
         return ReportInfo(**reports[0]) if reports else None
 
     @ErrorHandler.handle_api_error
-    def get_raw_report(
+    def get_policy_violations(
         self, public_id: str, report_id: str
     ) -> Optional[Dict[str, Any]]:
         """Fetch raw report data."""
         response = self._request(
-            "GET", f"/api/v2/applications/{public_id}/reports/{report_id}/raw"
+            "GET",
+            f"/api/v2/applications/{public_id}/reports/{report_id}/policy?includeViolationTimes=true",
         )
         return response.json()
 
+    @ErrorHandler.handle_api_error
+    def get_organizations(self) -> List[Organization]:
+        """Fetch all organizations."""
+        endpoint = "/api/v2/organizations"
+        response = self._request("GET", endpoint)
+        organizations_data = response.json().get("organizations", [])
+        return [Organization(**org) for org in organizations_data]
+
 
 class RawReportFetcher:
-    """🎯 Fetches and saves IQ Server reports as CSV files."""
+    """🎯 Fetches and saves IQ Server reports as CSV files and consolidates them."""
 
     def __init__(self, config: Config) -> None:
         self.config = config
@@ -201,6 +223,12 @@ class RawReportFetcher:
         )
         self.output_path = Path(resolve_path(config.output_dir))
         self.output_path.mkdir(parents=True, exist_ok=True)
+        self.organization_id_to_name = self._get_organization_id_to_name_mapping()
+
+    def _get_organization_id_to_name_mapping(self) -> Dict[str, str]:
+        """Fetches all organizations and creates a mapping from ID to name."""
+        organizations = self.iq.get_organizations()
+        return {org.id: org.name for org in organizations}
 
     def _extract_report_id(self, info: ReportInfo) -> Optional[str]:
         """Extract report ID from report info."""
@@ -215,65 +243,17 @@ class RawReportFetcher:
     def _save_as_csv(
         self, public_id: str, report_id: str, data: Dict[str, Any]
     ) -> bool:
-        """Save report data as CSV file."""
-        filename = f"report_{public_id}_{report_id}_raw.csv"
+        """Save report data as JSON file (no CSV conversion)."""
+        filename = f"report_{public_id}_{report_id}_raw.json"
         filepath = self.output_path / filename
 
-        components = data.get("components", [])
-        if not components:
-            with open(filepath, "w", newline="", encoding="utf-8") as f:
-                csv.writer(f).writerow(["No components found"])
-            return True
-
         try:
-            # Try pandas first for better handling
-            import pandas as pd
-
-            df = pd.json_normalize(components)
-            for col in df.columns:
-                if df[col].dtype == "object":
-                    df[col] = df[col].apply(
-                        lambda x: (
-                            json.dumps(x)
-                            if isinstance(x, (dict, list))
-                            else str(x)
-                            if x is not None
-                            else ""
-                        )
-                    )
-            df.to_csv(filepath, index=False, encoding="utf-8")
-        except ImportError:
-            # Fallback to manual CSV
-            self._save_csv_manual(components, filepath)
-        return True
-
-    def _save_csv_manual(
-        self, components: List[Dict[str, Any]], filepath: Path
-    ) -> None:
-        """Manual CSV writing fallback."""
-        csv_data = []
-        for c in components:
-            if len(c) == 1 and not c.get("swid"):
-                continue
-            security_issues = c.get("securityData", {}).get("securityIssues", [])
-            row = {
-                "Package URL": c.get("packageUrl", ""),
-                "Display Name": c.get("displayName", ""),
-                "Security Issues Count": len(security_issues),
-                "License Data": (
-                    json.dumps(c.get("licenseData", {})) if c.get("licenseData") else ""
-                ),
-                "Security Issues": (
-                    json.dumps(security_issues) if security_issues else ""
-                ),
-            }
-            csv_data.append(row)
-
-        if csv_data:
-            with open(filepath, "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=list(csv_data[0].keys()))
-                writer.writeheader()
-                writer.writerows(csv_data)
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save JSON: {e}")
+            return False
 
     def _fetch_app_report(self, app: Application, idx: int, total: int) -> bool:
         """Fetch and save report for a single application."""
@@ -290,7 +270,7 @@ class RawReportFetcher:
                 logger.warning(f"⚠️  [{idx}/{total}] No report ID for {app.name}")
                 return False
 
-            data = self.iq.get_raw_report(app.publicId, report_id)
+            data = self.iq.get_policy_violations(app.publicId, report_id)
             if not data:
                 logger.warning(f"⚠️  [{idx}/{total}] No report data for {app.name}")
                 return False
@@ -327,7 +307,7 @@ class RawReportFetcher:
         return apps
 
     def fetch_all_reports(self) -> None:
-        """Main method to fetch all reports."""
+        """Main method to fetch all reports and consolidate them."""
         logger.info("🚀 Starting raw report fetch process...")
         logger.info(f"📁 Output directory: {self.output_path.absolute()}")
 
@@ -347,7 +327,7 @@ class RawReportFetcher:
 
         # Final summary with emojis
         logger.info("=" * 50)
-        logger.info(f"🎉 Processing completed!")
+        logger.info("🎉 Processing completed!")
         logger.info(f"✅ Successfully processed: {success_count}/{total}")
 
         if success_count == total:
@@ -357,6 +337,151 @@ class RawReportFetcher:
             logger.info(f"⚠️  {failed} reports failed to fetch")
         else:
             logger.error("😞 No reports were successfully fetched")
+
+        # Consolidate all JSON reports into CSV as default output
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        consolidated_csv_filename = f"{timestamp}_consolidated_security_report.csv"
+        consolidated_csv = Path(self.output_path.parent) / consolidated_csv_filename
+        self.consolidate_reports_to_csv(consolidated_csv)
+
+    def consolidate_reports_to_csv(self, output_csv_path: Path) -> None:
+        """Consolidate all JSON reports into a single CSV as specified."""
+        json_files = list(self.output_path.glob("report_*_raw.json"))
+        if not json_files:
+            logger.warning("❌ No JSON files found to consolidate!")
+            return
+        logger.info(
+            f"🔍 Found {len(json_files)} JSON files to process for consolidation."
+        )
+        # First pass: aggregate all violations per application
+        app_severity_counts = {}
+        app_rows = []
+        for json_file in sorted(json_files):
+            try:
+                with open(json_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                app = data.get("application", {})
+                app_id = app.get("publicId", "unknown")
+                org_id = app.get("organizationId", "unknown")
+                components = data.get("components", [])
+
+                # Fetch organization name
+                org_name = self.organization_id_to_name.get(org_id, "Unknown Organization")
+
+                if app_id not in app_severity_counts:
+                    app_severity_counts[app_id] = {
+                        "Critical": 0,
+                        "Severe": 0,
+                        "Moderate": 0,
+                    }
+                for c in components:
+                    violations = c.get("violations", [])
+                    for violation in violations:
+                        threat_level = violation.get("policyThreatLevel", 0)
+                        if threat_level >= 7:
+                            app_severity_counts[app_id]["Critical"] += 1
+                        elif threat_level >= 4:
+                            app_severity_counts[app_id]["Severe"] += 1
+                        elif threat_level >= 1:
+                            app_severity_counts[app_id]["Moderate"] += 1
+                app_rows.append((app_id, org_id, org_name, components))
+            except Exception as e:
+                logger.error(f"   ❌ Error processing {json_file.name}: {e}")
+        # Second pass: build rows with total counts for each app
+        consolidated_data = []
+        for app_id, org_id, org_name, components in app_rows:
+            for c in components:
+                component_name = c.get("displayName", "")
+                violations = c.get("violations", [])
+                if not violations:
+                    continue  # skip rows with no policy violations
+                for violation in violations:
+                    threat_level = violation.get("policyThreatLevel", 0)
+
+                    # Severity label not used in output, but kept for logic
+                    def extract_cve_info(constraints):
+                        cve_info = {
+                            "cve_id": "",
+                            "condition": "",
+                            "constraint_name": "",
+                        }
+
+                        for constraint in constraints:
+                            constraint_name = constraint.get("constraintName", "")
+                            conditions = constraint.get("conditions", [])
+                            cve_info["constraint_name"] = constraint_name
+                            cve_ids = []
+                            condition_parts = []
+                            for condition in conditions:
+                                condition_summary = condition.get(
+                                    "conditionSummary", ""
+                                )
+                                condition_reason = condition.get("conditionReason", "")
+                                cve_match = re.search(
+                                    r"CVE-\d{4}-\d+",
+                                    condition_summary + " " + condition_reason,
+                                )
+                                if cve_match and cve_match.group(0) not in cve_ids:
+                                    cve_ids.append(cve_match.group(0))
+                                if condition_reason:
+                                    condition_parts.append(condition_reason)
+                                elif condition_summary:
+                                    condition_parts.append(condition_summary)
+                            cve_info["cve_id"] = ", ".join(cve_ids) if cve_ids else ""
+                            cve_info["condition"] = (
+                                " | ".join(condition_parts) if condition_parts else ""
+                            )
+                        return cve_info
+
+                    cve_info = extract_cve_info(violation.get("constraints", []))
+                    policy_action = ""
+                    if violation.get("policyThreatCategory", "").upper() == "SECURITY":
+                        if threat_level >= 7:
+                            policy_action = "Security-Critical"
+                        elif threat_level >= 4:
+                            policy_action = "Security-CVSS score than or equals 7"
+                        else:
+                            policy_action = "Security-Moderate"
+                    else:
+                        sev = (
+                            "Critical"
+                            if threat_level >= 7
+                            else "Severe"
+                            if threat_level >= 4
+                            else "Moderate"
+                            if threat_level >= 1
+                            else "Low"
+                        )
+                        policy_action = (
+                            f"{violation.get('policyThreatCategory', '')}-{sev}"
+                            if violation.get("policyThreatCategory", "")
+                            else sev
+                        )
+                    consolidated_row = {
+                        "No.": len(consolidated_data) + 1,
+                        "Application": app_id,
+                        "Organization": org_name,  # Use org_name here
+                        "time": "10 hours ago",
+                        "Critical (7-10)": app_severity_counts[app_id]["Critical"],
+                        "Severe (4-6)": app_severity_counts[app_id]["Severe"],
+                        "Moderate (1-3)": app_severity_counts[app_id]["Moderate"],
+                        "Policy": violation.get("policyName", ""),
+                        "Component": component_name,
+                        "Threat": threat_level,
+                        "Policy/Action": policy_action,
+                        "Constraint Name": cve_info["constraint_name"],
+                        "Condition": cve_info["condition"],
+                        "CVE": cve_info["cve_id"],
+                    }
+                    consolidated_data.append(consolidated_row)
+        if consolidated_data:
+            df_consolidated = pd.DataFrame(consolidated_data)
+            output_csv_path.parent.mkdir(parents=True, exist_ok=True)
+            df_consolidated.to_csv(output_csv_path, index=False)
+            logger.info(f"💾 Consolidated CSV saved to: {output_csv_path}")
+            logger.info(f"📊 Generated {len(consolidated_data)} consolidated rows.")
+        else:
+            logger.warning("❌ No data was consolidated!")
 
 
 @ErrorHandler.handle_config_error
